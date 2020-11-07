@@ -16,16 +16,20 @@
 
 package org.gradle.internal.resource.transfer
 
-import spock.lang.Specification
 import org.gradle.internal.logging.progress.ProgressLogger
+import spock.lang.Specification
+import spock.lang.Unroll
+
+import static org.gradle.internal.resource.transfer.ResourceOperation.Type
+import static org.gradle.internal.resource.transfer.ResourceOperation.toHumanReadableFormat
 
 class ResourceOperationTest extends Specification {
 
     ProgressLogger progressLogger = Mock()
 
-    def "no progress event is logged for files < 1024bytes"(){
+    def "no progress event is logged for files < 1024 bytes"() {
         given:
-        def operation = new ResourceOperation(progressLogger, ResourceOperation.Type.download, 1023, "res")
+        def operation = new ResourceOperation(progressLogger, Type.download, 1023)
         when:
         operation.logProcessedBytes(1023)
         then:
@@ -34,7 +38,7 @@ class ResourceOperationTest extends Specification {
 
     def "logs processed bytes in kbyte intervals"() {
         given:
-        def operation = new ResourceOperation(progressLogger, ResourceOperation.Type.download, 1024 * 10, "res")
+        def operation = new ResourceOperation(progressLogger, Type.download, 1024 * 10)
         when:
         operation.logProcessedBytes(512 * 0)
         operation.logProcessedBytes(512 * 1)
@@ -45,51 +49,130 @@ class ResourceOperationTest extends Specification {
         operation.logProcessedBytes(512 * 1)
         operation.logProcessedBytes(512 * 2)
         then:
-        1 * progressLogger.progress("1 KB/10 KB downloaded")
-        1 * progressLogger.progress("2 KB/10 KB downloaded")
+        1 * progressLogger.progress("1 KiB/10 KiB downloaded")
+        1 * progressLogger.progress("2 KiB/10 KiB downloaded")
         0 * progressLogger.progress(_)
     }
 
-    def "last chunk of bytes <1k is not logged"(){
+    def "last chunk of bytes <1k is not logged"() {
         given:
-        def operation = new ResourceOperation(progressLogger, ResourceOperation.Type.download, 2000, "res")
+        def operation = new ResourceOperation(progressLogger, Type.download, 2000)
         when:
         operation.logProcessedBytes(1000)
         operation.logProcessedBytes(1000)
         then:
-        1 * progressLogger.progress("1 KB/1 KB downloaded")
+        1 * progressLogger.progress("1 KiB/1 KiB downloaded")
         0 * progressLogger.progress(_)
     }
 
     def "adds operationtype information in progress output"() {
         given:
-        def operation = new ResourceOperation(progressLogger, type, 1024 * 10, "res")
+        def operation = new ResourceOperation(progressLogger, type, 1024 * 10)
         when:
         operation.logProcessedBytes(1024)
         then:
         1 * progressLogger.progress(message)
         where:
-        type                            | message
-        ResourceOperation.Type.download | "1 KB/10 KB downloaded"
-        ResourceOperation.Type.upload   | "1 KB/10 KB uploaded"
+        type          | message
+        Type.download | "1 KiB/10 KiB downloaded"
+        Type.upload   | "1 KiB/10 KiB uploaded"
     }
 
-    void "completed completes progressLogger"() {
+    def "completed completes progressLogger"() {
         given:
-        def operation = new ResourceOperation(progressLogger, ResourceOperation.Type.upload, 1, "res")
+        def operation = new ResourceOperation(progressLogger, Type.upload, 1)
         when:
         operation.completed()
         then:
         1 * progressLogger.completed()
     }
 
-    void "handles unknown content length"() {
+    def "handles unknown content length"() {
         given:
-        def operation = new ResourceOperation(progressLogger, ResourceOperation.Type.upload, 0, "res")
+        def operation = new ResourceOperation(progressLogger, Type.upload, 0)
         when:
         operation.logProcessedBytes(1024)
         then:
-        1 * progressLogger.progress("1 KB/unknown size uploaded")
+        1 * progressLogger.progress("1 KiB/unknown size uploaded")
+    }
+
+    @Unroll
+    def "converts to 1024 based human readable format (#bytes -> #humanReadableString)"() {
+        expect:
+        toHumanReadableFormat(bytes) == humanReadableString
+
+        where:
+        bytes || humanReadableString
+        0     || '0 B'
+        null  || 'unknown size'
+    }
+
+    @Unroll
+    def "converts 2^10 based human readable format (±#bytes -> ±#humanReadableString)"(long bytes, String humanReadableString) {
+        expect:
+        toHumanReadableFormat(bytes) == humanReadableString
+        toHumanReadableFormat(-bytes) == "-$humanReadableString"
+
+        where:
+        bytes             || humanReadableString
+        1                 || '1 B'
+        10                || '10 B'
+        11                || '11 B'
+        111               || '111 B'
+        512               || '512 B'
+        1023              || '1023 B'
+        1024              || '1 KiB'
+        1025              || '1 KiB'
+        1024**1 - 1       || '1023 B'
+
+        1024**1           || '1 KiB'
+        1024**1 + 1       || '1 KiB'
+        1024**2 - 1       || '1023 KiB'
+
+        1024**2           || '1 MiB'
+        1024**2 + 1       || '1 MiB'
+        1024**3 - 1       || '1023 MiB'
+
+        1024**3           || '1 GiB'
+        1024**3 + 1       || '1 GiB'
+        1024**4 - 1       || '1023 GiB'
+
+        1024**4           || '1 TiB'
+        1024**4 + 1       || '1 TiB'
+        1024**5 - 1       || '1023 TiB'
+
+        1024**5           || '1 PiB'
+        1024**5 + 1       || '1 PiB'
+        1024**6 - 1       || '1023 PiB'
+
+        1024**6           || '1 EiB'
+        1024**6 + 1       || '1 EiB'
+
+        Integer.MAX_VALUE || '1 GiB'
+        Long.MAX_VALUE    || '7 EiB'
+    }
+
+    @Unroll
+    def "converts random values to 2^10 based human readable format"() {
+        expect:
+        def rand = new Random(0)
+        (0..1_000_000)
+            .collect { rand.nextLong() }
+            .each { long bytes ->
+                assert toHumanReadableFormat(bytes) == toHumanReadableFormatSlow(bytes)
+            }
+    }
+
+    private static String toHumanReadableFormatSlow(long bytes) {
+        switch (Math.abs(bytes)) {
+            case { it < 1024 }: return "${bytes} B"
+            case { it < 1024**2 }: return "${(bytes / 1024**1).longValue()} KiB"
+            case { it < 1024**3 }: return "${(bytes / 1024**2).longValue()} MiB"
+            case { it < 1024**4 }: return "${(bytes / 1024**3).longValue()} GiB"
+            case { it < 1024**5 }: return "${(bytes / 1024**4).longValue()} TiB"
+            case { it < 1024**6 }: return "${(bytes / 1024**5).longValue()} PiB"
+            case { it < 1024**7 }: return "${(bytes / 1024**6).longValue()} EiB"
+        }
     }
 }
 

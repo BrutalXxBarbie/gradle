@@ -16,11 +16,19 @@
 
 package org.gradle.internal.resource.transfer;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.commons.lang.StringUtils;
 import org.gradle.internal.logging.progress.ProgressLogger;
 
+import javax.annotation.Nullable;
+
 public class ResourceOperation {
-    public enum Type{
+
+    private static final int BIT_GROUP_COUNT = 10;
+    private static final int KiB_BASE = 1 << BIT_GROUP_COUNT;
+    private static final String[] UNITS = new String[]{" B", " KiB", " MiB", " GiB", " TiB", " PiB", " EiB"};
+
+    public enum Type {
         download,
         upload;
 
@@ -28,40 +36,42 @@ public class ResourceOperation {
             return StringUtils.capitalize(toString());
         }
     }
+
     private final ProgressLogger progressLogger;
     private final Type operationType;
     private final String contentLengthString;
-    private final String resourceName;
 
     private long loggedKBytes;
     private long totalProcessedBytes;
 
-    public ResourceOperation(ProgressLogger progressLogger, Type type, long contentLength, String resourceName) {
+    public ResourceOperation(ProgressLogger progressLogger, Type type, long contentLength) {
         this.progressLogger = progressLogger;
         this.operationType = type;
-        this.contentLengthString = getLengthText(contentLength != 0 ? contentLength : null);
-        this.resourceName = resourceName;
+        this.contentLengthString = toHumanReadableFormat(contentLength == 0 ? null : contentLength);
     }
 
-    private String getLengthText(Long bytes) {
+    @VisibleForTesting
+    static String toHumanReadableFormat(@Nullable Long bytes) {
         if (bytes == null) {
             return "unknown size";
-        }
-        if (bytes < 1024) {
-            return bytes + " B";
-        } else if (bytes < 1048576) {
-            return (bytes / 1024) + " KB";
+        } else if (bytes < 0) {
+            return "-" + toHumanReadableFormat(-bytes);
         } else {
-            return String.format("%.2f MB", bytes / 1048576.0);
+            int baseExponent = ((Long.SIZE - 1) - Long.numberOfLeadingZeros(bytes)) / BIT_GROUP_COUNT;
+            long l = 1L << (baseExponent * BIT_GROUP_COUNT);
+
+            long result = bytes / l;
+            String unit = UNITS[baseExponent];
+            return result + unit;
         }
     }
 
     public void logProcessedBytes(long processedBytes) {
         totalProcessedBytes += processedBytes;
-        long processedKB = totalProcessedBytes / 1024;
-        if (processedKB > loggedKBytes) {
-            loggedKBytes = processedKB;
-            String progressMessage = String.format("%s/%s %sed", getLengthText(totalProcessedBytes), contentLengthString, operationType);
+        long processedKiB = totalProcessedBytes / KiB_BASE;
+        if (processedKiB > loggedKBytes) {
+            loggedKBytes = processedKiB;
+            String progressMessage = String.format("%s/%s %sed", toHumanReadableFormat(totalProcessedBytes), contentLengthString, operationType);
             progressLogger.progress(progressMessage);
         }
     }
